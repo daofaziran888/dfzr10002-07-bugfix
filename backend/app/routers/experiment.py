@@ -30,6 +30,19 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/stats")
+def status_stats() -> dict[str, Any]:
+    """实验看板统计：与列表、详情读同一份内存数据，避免数量错位。"""
+    return {"module": "experiment", **service.status_stats()}
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出分析实验管理清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "experiment", "total": total, "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条分析实验明细；不存在时给出可读的错误说明。"""
@@ -50,16 +63,15 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条分析实验执行启动实验、结束实验、关闭实验；不允许的动作会被拦下并说明原因。"""
-    action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    """对单条分析实验执行启动/结束/关闭及异常处置；非法流转会被拦下并说明原因。
+
+    状态只允许 草稿→运行中→已完成→已关闭 单向逐级流转；并发与重复点击在
+    服务层加锁并校验前置状态，只接受一个请求，其余请求得到明确拒绝。
+    """
+    values = payload.values or {}
+    action = str(values.get("action") or "").strip()
+    reason = values.get("reason")
+    entry, message = service.run_action(entry_id, action, reason=str(reason) if reason is not None else None)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出分析实验管理清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "experiment", "total": total, "items": items}
